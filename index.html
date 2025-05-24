@@ -11,6 +11,7 @@
             --dark: #2d3436;
             --light: #f5f6fa;
             --success: #00b894;
+            --error: #d63031;
         }
 
         body {
@@ -204,6 +205,13 @@
             box-shadow: 0 5px 15px rgba(108, 92, 231, 0.3);
         }
 
+        .convert-btn:disabled {
+            background: #b2bec3;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
         .progress-container {
             margin-top: 1.5rem;
             display: none;
@@ -235,6 +243,45 @@
             display: block;
         }
 
+        .preview-container {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 1rem;
+            margin-top: 1rem;
+        }
+
+        .preview-item {
+            width: 80px;
+            height: 80px;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+            box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+        }
+
+        .preview-item img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+
+        .preview-item-remove {
+            position: absolute;
+            top: 2px;
+            right: 2px;
+            background: var(--error);
+            color: white;
+            border: none;
+            width: 18px;
+            height: 18px;
+            border-radius: 50%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 10px;
+            cursor: pointer;
+        }
+
         /* Icons (using Unicode as fallback) */
         .icon-upload::before {
             content: "↑";
@@ -246,6 +293,33 @@
 
         .icon-magic::before {
             content: "✨";
+        }
+
+        .toast {
+            position: fixed;
+            bottom: 20px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: var(--dark);
+            color: white;
+            padding: 12px 24px;
+            border-radius: 8px;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.2);
+            opacity: 0;
+            transition: opacity 0.3s ease;
+            z-index: 1000;
+        }
+
+        .toast.show {
+            opacity: 1;
+        }
+
+        .toast.error {
+            background: var(--error);
+        }
+
+        .toast.success {
+            background: var(--success);
         }
     </style>
 </head>
@@ -263,6 +337,8 @@
                 <p>or click to browse files</p>
                 <input type="file" id="fileInput" accept="image/*" multiple>
             </div>
+            
+            <div id="previewContainer" class="preview-container"></div>
             
             <div class="settings-panel">
                 <div class="format-selector">
@@ -293,7 +369,7 @@
                 </div>
             </div>
             
-            <button class="convert-btn" id="convertBtn">
+            <button class="convert-btn" id="convertBtn" disabled>
                 <i class="icon-magic"></i>
                 Convert Now
             </button>
@@ -306,6 +382,8 @@
             <span id="progressText">0%</span>
         </div>
     </div>
+
+    <div class="toast" id="toast"></div>
 
     <script>
         document.addEventListener('DOMContentLoaded', () => {
@@ -320,6 +398,12 @@
             const enableResize = document.getElementById('enableResize');
             const widthInput = document.getElementById('width');
             const heightInput = document.getElementById('height');
+            const previewContainer = document.getElementById('previewContainer');
+            const toast = document.getElementById('toast');
+            const outputFormat = document.getElementById('outputFormat');
+
+            let filesToConvert = [];
+            let convertedFiles = [];
 
             // Update quality value display
             qualitySlider.addEventListener('input', () => {
@@ -337,7 +421,7 @@
             
             dropZone.addEventListener('dragover', (e) => {
                 e.preventDefault();
-                dropZone.style.borderColor = var(--primary);
+                dropZone.style.borderColor = 'var(--primary)';
                 dropZone.style.backgroundColor = 'rgba(108, 92, 231, 0.1)';
             });
             
@@ -357,57 +441,89 @@
             fileInput.addEventListener('change', () => {
                 handleFiles(fileInput.files);
             });
-            
+
+            // Show toast message
+            function showToast(message, type = 'success', duration = 3000) {
+                toast.textContent = message;
+                toast.className = 'toast show ' + type;
+                setTimeout(() => {
+                    toast.className = 'toast';
+                }, duration);
+            }
+
+            // Create preview thumbnails
+            function createPreview(file, index) {
+                const reader = new FileReader();
+                reader.onload = (e) => {
+                    const previewItem = document.createElement('div');
+                    previewItem.className = 'preview-item';
+                    
+                    const img = document.createElement('img');
+                    img.src = e.target.result;
+                    img.alt = file.name;
+                    
+                    const removeBtn = document.createElement('button');
+                    removeBtn.className = 'preview-item-remove';
+                    removeBtn.innerHTML = '×';
+                    removeBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        filesToConvert.splice(index, 1);
+                        previewContainer.removeChild(previewItem);
+                        updateConvertButtonState();
+                        if (filesToConvert.length === 0) {
+                            resetDropZone();
+                        }
+                    });
+                    
+                    previewItem.appendChild(img);
+                    previewItem.appendChild(removeBtn);
+                    previewContainer.appendChild(previewItem);
+                };
+                reader.readAsDataURL(file);
+            }
+
             // Handle file processing
             function handleFiles(files) {
-                if (files.length > 0) {
-                    // Show file count or previews
+                if (files.length === 0) return;
+                
+                // Clear previous files if any
+                if (filesToConvert.length > 0) {
+                    filesToConvert = [];
+                    previewContainer.innerHTML = '';
+                }
+                
+                // Add new files
+                for (let i = 0; i < files.length; i++) {
+                    const file = files[i];
+                    if (file.type.startsWith('image/')) {
+                        filesToConvert.push(file);
+                        createPreview(file, filesToConvert.length - 1);
+                    }
+                }
+                
+                if (filesToConvert.length > 0) {
                     dropZone.innerHTML = `
                         <i class="icon-check"></i>
-                        <h3>${files.length} file(s) selected</h3>
+                        <h3>${filesToConvert.length} file(s) selected</h3>
                         <p>Ready to convert</p>
                         <input type="file" id="fileInput" accept="image/*" multiple>
                     `;
                     // Reattach event listeners
                     dropZone.addEventListener('click', () => fileInput.click());
+                    updateConvertButtonState();
+                    showToast(`${filesToConvert.length} images loaded`, 'success');
+                } else {
+                    showToast('No valid image files found', 'error');
                 }
             }
-            
-            // Convert button click
-            convertBtn.addEventListener('click', async () => {
-                const files = fileInput.files;
-                if (files.length === 0) {
-                    alert('Please select at least one image file');
-                    return;
-                }
-                
-                const outputFormat = document.getElementById('outputFormat').value;
-                const quality = qualitySlider.value;
-                
-                progressContainer.style.display = 'block';
-                
-                // Simulate conversion progress
-                let progress = 0;
-                const interval = setInterval(() => {
-                    progress += 5;
-                    progressFill.style.width = `${progress}%`;
-                    progressText.textContent = `${progress}%`;
-                    
-                    if (progress >= 100) {
-                        clearInterval(interval);
-                        // Actual conversion would happen here
-                        setTimeout(() => {
-                            alert(`Successfully converted ${files.length} file(s) to ${outputFormat.toUpperCase()}!`);
-                            resetUI();
-                        }, 500);
-                    }
-                }, 200);
-            });
-            
-            function resetUI() {
-                progressContainer.style.display = 'none';
-                progressFill.style.width = '0%';
-                progressText.textContent = '0%';
+
+            // Update convert button state based on files
+            function updateConvertButtonState() {
+                convertBtn.disabled = filesToConvert.length === 0;
+            }
+
+            // Reset drop zone to initial state
+            function resetDropZone() {
                 dropZone.innerHTML = `
                     <i class="icon-upload"></i>
                     <h3>Drag & Drop Images Here</h3>
@@ -417,7 +533,175 @@
                 fileInput.value = '';
                 // Reattach event listeners
                 dropZone.addEventListener('click', () => fileInput.click());
+                updateConvertButtonState();
             }
+
+            // Convert image using Canvas API
+            async function convertImage(file, format, quality, width, height) {
+                return new Promise((resolve, reject) => {
+                    const img = new Image();
+                    const reader = new FileReader();
+                    
+                    reader.onload = (e) => {
+                        img.src = e.target.result;
+                    };
+                    
+                    img.onload = () => {
+                        const canvas = document.createElement('canvas');
+                        const ctx = canvas.getContext('2d');
+                        
+                        // Calculate new dimensions if resize is enabled
+                        let newWidth = img.width;
+                        let newHeight = img.height;
+                        
+                        if (enableResize.checked && width && height) {
+                            newWidth = parseInt(width);
+                            newHeight = parseInt(height);
+                        } else if (enableResize.checked && width) {
+                            const ratio = img.height / img.width;
+                            newWidth = parseInt(width);
+                            newHeight = Math.round(newWidth * ratio);
+                        } else if (enableResize.checked && height) {
+                            const ratio = img.width / img.height;
+                            newHeight = parseInt(height);
+                            newWidth = Math.round(newHeight * ratio);
+                        }
+                        
+                        canvas.width = newWidth;
+                        canvas.height = newHeight;
+                        
+                        // Draw image to canvas
+                        ctx.drawImage(img, 0, 0, newWidth, newHeight);
+                        
+                        // Convert to selected format
+                        canvas.toBlob((blob) => {
+                            if (!blob) {
+                                reject(new Error('Conversion failed'));
+                                return;
+                            }
+                            
+                            const convertedFile = new File([blob], 
+                                `${file.name.split('.')[0]}.${format}`, 
+                                { type: `image/${format}` }
+                            );
+                            
+                            resolve(convertedFile);
+                        }, `image/${format}`, quality / 100);
+                    };
+                    
+                    img.onerror = () => {
+                        reject(new Error('Failed to load image'));
+                    };
+                    
+                    reader.readAsDataURL(file);
+                });
+            }
+
+            // Download converted files
+            function downloadFiles(files) {
+                files.forEach((file, index) => {
+                    const url = URL.createObjectURL(file);
+                    const a = document.createElement('a');
+                    a.href = url;
+                    a.download = file.name;
+                    document.body.appendChild(a);
+                    a.click();
+                    setTimeout(() => {
+                        document.body.removeChild(a);
+                        URL.revokeObjectURL(url);
+                    }, 100);
+                });
+            }
+
+            // Create zip file of all converted images
+            async function createZip(files) {
+                if (!window.JSZip) {
+                    // Load JSZip library dynamically if not available
+                    const script = document.createElement('script');
+                    script.src = 'https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js';
+                    document.head.appendChild(script);
+                    
+                    return new Promise((resolve) => {
+                        script.onload = () => {
+                            resolve(createZipWithJSZip(files));
+                        };
+                    });
+                } else {
+                    return createZipWithJSZip(files);
+                }
+            }
+
+            async function createZipWithJSZip(files) {
+                const JSZip = window.JSZip;
+                const zip = new JSZip();
+                
+                // Add files to zip
+                files.forEach(file => {
+                    zip.file(file.name, file);
+                });
+                
+                // Generate zip file
+                const content = await zip.generateAsync({ type: 'blob' });
+                return new File([content], 'converted_images.zip', { type: 'application/zip' });
+            }
+
+            // Convert button click
+            convertBtn.addEventListener('click', async () => {
+                if (filesToConvert.length === 0) {
+                    showToast('Please select at least one image file', 'error');
+                    return;
+                }
+                
+                const format = outputFormat.value;
+                const quality = qualitySlider.value;
+                const width = widthInput.value;
+                const height = heightInput.value;
+                
+                convertBtn.disabled = true;
+                progressContainer.style.display = 'block';
+                convertedFiles = [];
+                
+                try {
+                    // Process files one by one with progress updates
+                    for (let i = 0; i < filesToConvert.length; i++) {
+                        const file = filesToConvert[i];
+                        const progress = Math.floor((i / filesToConvert.length) * 100);
+                        progressFill.style.width = `${progress}%`;
+                        progressText.textContent = `${progress}%`;
+                        
+                        try {
+                            const convertedFile = await convertImage(file, format, quality, width, height);
+                            convertedFiles.push(convertedFile);
+                        } catch (error) {
+                            console.error(`Error converting ${file.name}:`, error);
+                            showToast(`Failed to convert ${file.name}`, 'error');
+                        }
+                    }
+                    
+                    // Complete progress
+                    progressFill.style.width = '100%';
+                    progressText.textContent = '100%';
+                    
+                    if (convertedFiles.length > 0) {
+                        // Offer to download all files as zip if multiple files
+                        if (convertedFiles.length > 1) {
+                            const zipFile = await createZip(convertedFiles);
+                            downloadFiles([zipFile]);
+                            showToast(`Success! Downloaded ${convertedFiles.length} files as ZIP`, 'success');
+                        } else {
+                            downloadFiles(convertedFiles);
+                            showToast('Conversion complete! File downloaded', 'success');
+                        }
+                    } else {
+                        showToast('No files were successfully converted', 'error');
+                    }
+                } catch (error) {
+                    console.error('Conversion error:', error);
+                    showToast('An error occurred during conversion', 'error');
+                } finally {
+                    convertBtn.disabled = false;
+                }
+            });
         });
     </script>
 </body>
